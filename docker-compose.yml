@@ -1,0 +1,213 @@
+# ============================================================
+#  Credit Score ML — Docker Compose (Step 1 + CDC foundation)
+#
+#  Services started here:
+#    postgres    — the OLTP source database
+#    zookeeper   — required by Kafka (coordination service)
+#    kafka       — event streaming broker
+#    debezium    — CDC engine (watches Postgres, emits to Kafka)
+#    generator   — our continuous data generator
+#    kafka-ui    — (optional) web UI to inspect Kafka topics
+# ============================================================
+
+networks:
+  credit_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  kafka_data:
+
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────
+  # The source-of-truth OLTP database.
+  # We mount our schema SQL so it auto-runs on first start.
+  # We also mount our custom postgresql.conf to enable logical replication.
+  postgres:
+    image: postgres:15
+    container_name: credit_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       credit_scoring
+      POSTGRES_USER:     burxoniddin
+      POSTGRES_PASSWORD: Burxoniddin12345
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql
+      - ./feature_store/schema.sql:/docker-entrypoint-initdb.d/02_dwh.sql
+      # Append our WAL config to enable logical replication
+      - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf
+    command: >
+      postgres
+        -c config_file=/etc/postgresql/postgresql.conf
+        -c hba_file=/etc/postgresql/pg_hba.conf
+    networks:
+      - credit_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d credit_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Zookeeper ──────────────────────────────────────────────
+  # Kafka needs Zookeeper for cluster coordination.
+  # In newer Kafka (KRaft mode) you don't need this, but
+  # Debezium's official image still works best with Zookeeper.
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: credit_zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME:   2000
+    networks:
+      - credit_net
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Kafka ──────────────────────────────────────────────────
+  # The event bus. Debezium will publish change events here,
+  # and our consumer will read from these topics.
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: credit_kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT:           zookeeper:2181
+      # Internal address (used by other containers in the network)
+      KAFKA_ADVERTISED_LISTENERS:        PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME:  PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE:   "true"
+      # Keep messages for 7 days
+      KAFKA_LOG_RETENTION_HOURS:         168
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - credit_net
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # ── Debezium (Kafka Connect) ───────────────────────────────
+  # Debezium runs inside Kafka Connect.
+  # It reads Postgres's WAL and publishes every INSERT/UPDATE/DELETE
+  # as a structured JSON message to a Kafka topic.
+  # Topic naming: credit.public.<table_name>
+  debezium:
+    image: debezium/connect:2.6
+    container_name: credit_debezium
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVERS:           kafka:29092
+      GROUP_ID:                    1
+      CONFIG_STORAGE_TOPIC:        debezium_configs
+      OFFSET_STORAGE_TOPIC:        debezium_offsets
+      STATUS_STORAGE_TOPIC:        debezium_status
+      # Debezium uses Avro or JSON; JSON is simpler to start with
+      KEY_CONVERTER:               org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER:             org.apache.kafka.connect.json.JsonConverter
+      KEY_CONVERTER_SCHEMAS_ENABLE:   "false"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+    ports:
+      - "8083:8083"     # Debezium REST API - we'll POST connector config here
+    networks:
+      - credit_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8083/connectors || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # ── Data Generator ─────────────────────────────────────────
+  # Our Python script that continuously inserts realistic data.
+  # It waits for Postgres to be healthy before starting.
+  generator:
+    build:
+      context: ./data_generator
+      dockerfile: Dockerfile
+    container_name: credit_generator
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST:     postgres
+      POSTGRES_PORT:     5432
+      POSTGRES_DB:       credit_db
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+      SEED_USERS:        200
+      TICK_SECONDS:      2.0
+      NEW_USERS_CHANCE:  0.1
+    networks:
+      - credit_net
+
+  # ── Kafka Consumer ────────────────────────────────────────
+  # Reads CDC events from all 6 Kafka topics and writes them
+  # into the dwh schema in Postgres (our feature store).
+  consumer:
+    build:
+      context: .
+      dockerfile: kafka_consumer/Dockerfile
+    container_name: credit_consumer
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      debezium:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_GROUP_ID:          credit-score-consumer
+      KAFKA_AUTO_OFFSET:       earliest
+      POSTGRES_HOST:           postgres
+      POSTGRES_PORT:           5432
+      POSTGRES_DB:             credit_db
+      POSTGRES_USER:           postgres
+      POSTGRES_PASSWORD:       postgres
+      BATCH_SIZE:              50
+    volumes:
+      # Mount the schema SQL so the consumer can auto-create DWH tables
+      - ./feature_store/schema.sql:/app/schema.sql
+    networks:
+      - credit_net
+
+  # ── Kafka UI (optional but very useful) ────────────────────
+  # Visit http://localhost:8080 to see topics, messages, consumer groups.
+  # Great for debugging — you can watch CDC events arrive in real time.
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: credit_kafka_ui
+    restart: unless-stopped
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_CLUSTERS_0_NAME:            local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    ports:
+      - "8080:8080"
+    networks:
+      - credit_net

@@ -1,0 +1,32 @@
+{
+  "name": "credit-postgres-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+
+    "database.hostname": "postgres",
+    "database.port":     "5432",
+    "database.user":     "debezium",
+    "database.password": "debezium_pass",
+    "database.dbname":   "credit_db",
+
+    "plugin.name": "pgoutput",
+
+    "topic.prefix": "credit",
+
+    "table.include.list": "public.users,public.accounts,public.loan_applications,public.loans,public.payment_events,public.credit_inquiries",
+
+    "slot.name": "credit_debezium_slot",
+
+    "publication.name": "credit_publication",
+
+    "key.converter":                "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter":              "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable":   "false",
+    "value.converter.schemas.enable": "false",
+
+    "transforms":                              "unwrap",
+    "transforms.unwrap.type":                  "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.drop.tombstones":       "false",
+    "transforms.unwrap.delete.handling.mode":  "rewrite"
+  }
+}
