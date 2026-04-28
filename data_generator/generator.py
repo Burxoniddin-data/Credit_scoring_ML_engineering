@@ -3,6 +3,7 @@ from db_postgresql.insert import *
 from db_postgresql.queries import *
 from data_generator.utils import *
 from db_postgresql.connection import get_connection
+from psycopg2.extras import RealDictCursor
 
 def create_full_user(cur):
     employment = random_employment_status()
@@ -12,7 +13,7 @@ def create_full_user(cur):
         fake.first_name(),
         fake.last_name(),
         fake.unique.email(),
-        fake.date_of_birth(18, 75),
+        fake.date_of_birth(minimum_age=18, maximum_age=70),
         fake.phone_number(),
         fake.address(),
         fake.city(),
@@ -20,27 +21,29 @@ def create_full_user(cur):
         income
     ))
 
-    user_id = user[0]
+    user_id = user["user_id"]
+
     account = insert_account(
         cur,
         user_id,
         fake.bothify(text="####-####"),
         round(income * random.uniform(0.5, 3), 2)
     )
+    loan_type = random_loan_type()
 
     app = insert_loan_application(
         cur,
         user_id,
-        random_loan_type(),
-        random_loan_amount(random_loan_type(), income),
+        loan_type,
+        random_loan_amount(loan_type, income),
         random.choice([12, 24, 36]),
         fake.sentence()
     )
 
     loan = approve_loan(cur, {
-        "application_id": app[0],
-        "requested_amount": app[1],
-        "term_months": app[2],
+        "application_id": app['application_id'],
+        "requested_amount": app['requested_amount'],
+        "term_months": app['term_months'],
         "user_id": user_id
     }, income)
     return user_id
@@ -48,13 +51,13 @@ def create_full_user(cur):
 
 def seed(conn, n):
     print("Seeding...")
-    with conn.cursor() as cur:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
         for _ in range(n):
             create_full_user(cur)
     conn.commit()
 
 def simulation_tick(conn):
-    with conn.cursor() as cur:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
         if random.random() < 0.1:
             create_full_user(cur)
         loans = get_active_loans(cur)
@@ -68,7 +71,7 @@ def simulation_tick(conn):
         users = cur.fetchall()
         for u in users:
             if random.random() < 0.3:
-                add_inquiry(cur, u[0])
+                add_inquiry(cur, u['user_id'])
     conn.commit()
 
 def run():
@@ -81,5 +84,6 @@ def run():
             simulation_tick(conn)
             time.sleep(2)
         except Exception as e:
-            print("Error:", e)
+            import traceback
+            traceback.print_exc()
             conn.rollback()

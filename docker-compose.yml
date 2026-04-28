@@ -53,7 +53,7 @@ services:
   # =========================
   airflow-init:
     <<: *airflow-common
-    container_name: airflow_init
+    container_name: webserver
     entrypoint: /bin/bash
     command: >
       -c "
@@ -75,7 +75,7 @@ services:
   airflow-webserver:
     <<: *airflow-common
     container_name: airflow_webserver
-    command: webserver
+    command: api-server
     ports:
       - "8080:8080"
     depends_on:
@@ -103,9 +103,9 @@ services:
       --host 0.0.0.0
       --port 5000
     volumes:
-      - mlflow_data:/mlflow
+      - mlflow_data:/mlflow_utils
     ports:
-      - "5000:5000"
+      - "5001:5000"
 
   # =========================
   # 🤖 Data Generator
