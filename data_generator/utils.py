@@ -2,7 +2,6 @@ import random
 from faker import Faker
 
 fake = Faker()
-
 def random_employment_status():
     return random.choices(
         ['employed', 'self_employed', 'unemployed', 'retired'],

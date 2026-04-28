@@ -1,4 +1,6 @@
 import random
+import random
+from faker import Faker
 from datetime import date, timedelta
 from db_postgresql.queries import *
 
@@ -7,14 +9,12 @@ def approve_loan(cur, app, income):
     if not approval:
         update_loan_application(cur, app['application_id'], 'rejected', None, None)
         return None
-
     amount = float(app['requested_amount'])
     interest = round(random.uniform(5, 25), 2)
 
     monthly = round(
         (amount * (interest/100/12)) /
-        (1 - (1 + interest/100/12) ** (-app['term_months'])),
-        2)
+        (1 - (1 + interest/100/12) ** (-app['term_months'])), 2)
     next_due = date.today() + timedelta(days=30)
     update_loan_application(cur, app['application_id'], 'approved', amount, interest)
     loan = insert_loan(
@@ -57,11 +57,8 @@ def account_activity(cur, account):
 
     deposit = random.random() < 0.6
     amount = round(random.uniform(50, 2000), 2)
-
     delta = amount if deposit else -amount
-
     update_account_balance(cur, account['account_id'], delta)
-
     insert_account_event(
         cur,
         account['user_id'],
@@ -73,10 +70,7 @@ def account_activity(cur, account):
 
 
 def add_inquiry(cur, user_id):
-    import random
-    from faker import Faker
     fake = Faker()
-
     insert_credit_inquiry(
         cur,
         user_id,

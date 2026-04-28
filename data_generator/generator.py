@@ -21,7 +21,6 @@ def create_full_user(cur):
     ))
 
     user_id = user[0]
-
     account = insert_account(
         cur,
         user_id,
@@ -44,7 +43,6 @@ def create_full_user(cur):
         "term_months": app[2],
         "user_id": user_id
     }, income)
-
     return user_id
 
 
@@ -55,22 +53,17 @@ def seed(conn, n):
             create_full_user(cur)
     conn.commit()
 
-
 def simulation_tick(conn):
     with conn.cursor() as cur:
-
         if random.random() < 0.1:
             create_full_user(cur)
-
         loans = get_active_loans(cur)
         for loan in loans:
             make_payment(cur, loan)
-
         cur.execute("SELECT account_id, user_id FROM accounts ORDER BY RANDOM() LIMIT 5")
         accounts = cur.fetchall()
         for acc in accounts:
             account_activity(cur, acc)
-
         cur.execute("SELECT user_id FROM users ORDER BY RANDOM() LIMIT 3")
         users = cur.fetchall()
         for u in users:
