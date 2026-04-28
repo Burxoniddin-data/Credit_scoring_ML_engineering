@@ -50,7 +50,6 @@ def create_full_user(cur):
 
 
 def seed(conn, n):
-    print("Seeding...")
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         for _ in range(n):
             create_full_user(cur)
@@ -76,9 +75,8 @@ def simulation_tick(conn):
 
 def run():
     conn = get_connection()
-    n = int(input("Number of users you want to create: "))
-    seed(conn, n)
-    print("Simulation started...")
+    # n = int(input("Number of users you want to create: "))
+    seed(conn, 2000)
     while True:
         try:
             simulation_tick(conn)
